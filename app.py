@@ -1,4 +1,4 @@
-# app.py (Parte 1)
+# app.py
 import os
 import json
 from flask import Flask, jsonify, request
@@ -19,34 +19,32 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 app = Flask(__name__)
 CORS(app)
 
-# app.py (Parte 2)
 
 def generate_recipe(ingredientes):
-    # Junta os ingredientes enviados em uma única linha de texto
+    """Chama o Gemini para gerar a receita"""
     lista_ingredientes = ", ".join(ingredientes)
     conteudo_prompt = f"Crie uma receita utilizando obrigatoriamente estes ingredientes: {lista_ingredientes}."
     
-    # Faz a chamada para o modelo pedindo uma resposta estruturada em JSON
     response = client.models.generate_content(
         model="gemini-2.5-flash",
         contents=conteudo_prompt,
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_INSTRUCTION,
-            response_mime_type="application/json", # Força a saída em formato JSON
-            response_schema=RECEITA_SCHEMA,       # Segue o esquema do config.py
+            response_mime_type="application/json",
+            response_schema=RECEITA_SCHEMA,
         )
     )
     return response.text
 
-# app.py (Parte 3)
 
 @app.route("/")
 def root():
     return jsonify({
         "status": "success",
         "message": "API Gerador de Receitas funcionando!",
-        "version": "1.0"
+        "version": "2.0"
     }), 200
+
 
 @app.route("/generate", methods=["POST"])
 def generate():
@@ -61,32 +59,52 @@ def generate():
         
     ingredientes = data.get("ingredientes", [])
     
-    # Validação 2: É uma lista e possui no mínimo 3 itens?
-    if not isinstance(ingredientes, list) or len(ingredientes) < 3:
+    # Validação 2: É uma lista e possui no mínimo 1 item?
+    if not isinstance(ingredientes, list) or len(ingredientes) < 1:
         return jsonify({
             "status": "error",
-            "message": "Você precisa fornecer no mínimo 3 ingredientes."
+            "message": "Você precisa fornecer pelo menos 1 ingrediente."
         }), 400
     
     try:
-        # Pede para o Gemini gerar a receita (retorna como string JSON)
+        # Pega a resposta do Gemini (JSON string)
         receita_json_string = generate_recipe(ingredientes)
         
-        # Converte a string JSON em Dicionário Python para o Flask organizar a resposta
+        # Converte para dicionário Python
         receita_estruturada = json.loads(receita_json_string)
         
+        # VERIFICA SE FOI RECUSADO
+        if receita_estruturada.get("status") == "recusada":
+            return jsonify({
+                "status": "recusado",
+                "mensagem": receita_estruturada.get("motivo_recusa", "Ingrediente não permitido para receita."),
+                "ingredientes_enviados": ingredientes
+            }), 400  # Bad Request
+        
+        # Se chegou aqui, foi aceito → retorna a receita normal
         return jsonify({
             "status": "success",
             "ingredientes_enviados": ingredientes,
-            "dados_receita": receita_estruturada
+            "dados_receita": {
+                "nome": receita_estruturada.get("nome_da_receita"),
+                "porcoes": receita_estruturada.get("porcoes"),
+                "tempo_preparo": receita_estruturada.get("tempo_de_preparo"),
+                "ingredientes": receita_estruturada.get("ingredientes", []),
+                "modo_preparo": receita_estruturada.get("modo_de_preparo", [])
+            }
         }), 200
         
+    except json.JSONDecodeError as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erro ao processar resposta do Gemini: {str(e)}"
+        }), 500
     except Exception as e:
         return jsonify({
             "status": "error",
             "message": f"Erro ao gerar a receita: {str(e)}"
         }), 500
 
-# Executa o servidor local
+
 if __name__ == "__main__":
     app.run(debug=True)
